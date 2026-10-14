@@ -1,86 +1,132 @@
-"""
-Agent minimal avec l'API Claude (tool use).
-
-L'agent peut lister et lire les fichiers d'un dossier "notes/",
-puis répondre à ta question en s'appuyant dessus.
-
-Installation :
-    pip install anthropic
-    Variable d'environnement ANTHROPIC_API_KEY=sk-ant-...
-    (PyCharm : Run > Edit Configurations > Environment variables)
-
-Utilisation :
-    python agent.py      puis écris tes questions dans la console
-                         (tape "quitter" pour sortir)
-"""
-
-import sys
+import os
+import threading
 from pathlib import Path
 
 import anthropic
 
-MODELE = "claude-sonnet-5-5"
-DOSSIER = Path("notes").resolve()
+MODELE = os.environ.get("NOTEBOT_MODELE", "claude-sonnet-5-5")
+DOSSIER = Path(os.environ.get("NOTEBOT_NOTES", Path(__file__).parent / "notes")).resolve()
 MAX_TOURS = 10
+MAX_TOKENS = 2048
+MAX_QUESTIONS = 20
+MAX_CARACTERES = 20000
+MAX_RESULTATS = 50
+EXTENSIONS = {".txt", ".md"}
 
+SYSTEME = (
+    "Tu es NoteBot, un assistant qui aide un étudiant à réviser. "
+    "Avant de répondre, consulte ses notes avec les outils disponibles. "
+    "Indique le fichier sur lequel tu t'appuies. "
+    "Si l'information n'est pas dans ses notes, dis-le clairement avant de répondre avec tes connaissances. "
+    "Réponds dans la langue de l'étudiant."
+)
 
 OUTILS = [
     {
         "name": "lister_fichiers",
-        "description": "Liste les fichiers disponibles dans le dossier de notes.",
+        "description": "Liste les fichiers de notes disponibles (.txt et .md).",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "lire_fichier",
-        "description": "Retourne le contenu texte d'un fichier du dossier de notes.",
+        "description": "Retourne le contenu complet d'un fichier de notes.",
         "input_schema": {
             "type": "object",
             "properties": {"nom": {"type": "string", "description": "Nom du fichier, ex. 'pointeurs.txt'"}},
             "required": ["nom"],
         },
     },
+    {
+        "name": "chercher",
+        "description": "Cherche un mot ou une expression dans toutes les notes et retourne les lignes trouvées avec leur fichier et numéro de ligne.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"texte": {"type": "string", "description": "Mot ou expression à chercher (insensible à la casse)"}},
+            "required": ["texte"],
+        },
+    },
 ]
 
 
-# 2. Le CODE qui exécute vraiment chaque outil (c'est nous qui l'écrivons).
+class TropDEtapes(RuntimeError):
+    pass
+
+
+def fichiers_notes():
+    if not DOSSIER.is_dir():
+        return []
+    return sorted(f for f in DOSSIER.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS)
+
+
+def lister_fichiers():
+    noms = [f.name for f in fichiers_notes()]
+    return "\n".join(noms) if noms else "Aucune note disponible."
+
+
+def lire_fichier(nom):
+    chemin = (DOSSIER / nom).resolve()
+    if chemin.parent != DOSSIER or chemin.suffix.lower() not in EXTENSIONS:
+        return "Erreur : fichier non autorisé."
+    if not chemin.is_file():
+        return f"Erreur : '{nom}' n'existe pas."
+    texte = chemin.read_text(encoding="utf-8", errors="replace")
+    if len(texte) > MAX_CARACTERES:
+        return texte[:MAX_CARACTERES] + "\n[... contenu tronqué]"
+    return texte
+
+
+def chercher(texte):
+    cible = texte.strip().lower()
+    if not cible:
+        return "Erreur : texte de recherche vide."
+    resultats = []
+    for fichier in fichiers_notes():
+        lignes = fichier.read_text(encoding="utf-8", errors="replace").splitlines()
+        for numero, ligne in enumerate(lignes, start=1):
+            if cible in ligne.lower():
+                resultats.append(f"{fichier.name}:{numero}: {ligne.strip()}")
+                if len(resultats) >= MAX_RESULTATS:
+                    return "\n".join(resultats) + f"\n[... limité aux {MAX_RESULTATS} premiers résultats]"
+    return "\n".join(resultats) if resultats else f"Aucun résultat pour '{texte}'."
+
+
+ACTIONS = {
+    "lister_fichiers": lister_fichiers,
+    "lire_fichier": lire_fichier,
+    "chercher": chercher,
+}
+
+
 def executer_outil(nom, arguments):
-    if nom == "lister_fichiers":
-        fichiers = [f.name for f in DOSSIER.iterdir() if f.is_file()]
-        return "\n".join(fichiers) or "(dossier vide)"
-
-    if nom == "lire_fichier":
-        chemin = (DOSSIER / arguments["nom"]).resolve()
-        if chemin.parent != DOSSIER:
-            return "Erreur : accès refusé hors du dossier de notes."
-        if not chemin.is_file():
-            return f"Erreur : '{arguments['nom']}' n'existe pas."
-        return chemin.read_text(encoding="utf-8")[:20000]
-
-    return f"Erreur : outil inconnu '{nom}'."
+    action = ACTIONS.get(nom)
+    if action is None:
+        return f"Erreur : outil inconnu '{nom}'."
+    try:
+        return action(**arguments)
+    except (TypeError, OSError) as erreur:
+        return f"Erreur : {erreur}"
 
 
-# 3. La BOUCLE de l'agent : traite UN message de l'utilisateur
-#    (avec autant d'appels d'outils que nécessaire).
-def agent(messages, client):
-    for tour in range(MAX_TOURS):
+def repondre(messages, client):
+    outils_utilises = []
+    for _ in range(MAX_TOURS):
         reponse = client.messages.create(
             model=MODELE,
-            max_tokens=2048,
-            system="Tu aides un étudiant à réviser. Utilise ses notes avant de répondre.",
+            max_tokens=MAX_TOKENS,
+            system=SYSTEME,
             tools=OUTILS,
             messages=messages,
         )
         messages.append({"role": "assistant", "content": reponse.content})
 
         if reponse.stop_reason != "tool_use":
-
-            return "".join(b.text for b in reponse.content if b.type == "text")
-
+            texte = "".join(bloc.text for bloc in reponse.content if bloc.type == "text")
+            return texte, outils_utilises
 
         resultats = []
         for bloc in reponse.content:
             if bloc.type == "tool_use":
-                print(f"  [outil] {bloc.name}({bloc.input})")
+                outils_utilises.append({"nom": bloc.name, "arguments": bloc.input})
                 resultats.append({
                     "type": "tool_result",
                     "tool_use_id": bloc.id,
@@ -88,29 +134,70 @@ def agent(messages, client):
                 })
         messages.append({"role": "user", "content": resultats})
 
-    return "Arrêt : trop d'étapes."
+    raise TropDEtapes(f"Aucune réponse finale après {MAX_TOURS} étapes.")
 
 
-# 4. Le CHAT : on garde la même liste "messages" d'une question à l'autre,
-#    donc le bot se souvient de toute la conversation.
-if __name__ == "__main__":
-    DOSSIER.mkdir(exist_ok=True)
-    client = anthropic.Anthropic()
-    messages = []
+class Conversation:
+    def __init__(self, client):
+        self.client = client
+        self.messages = []
+        self.verrou = threading.Lock()
 
-    print("NoteBot prêt ! Pose ta question (tape 'quitter' pour sortir).")
+    def envoyer(self, question):
+        with self.verrou:
+            self._limiter_historique()
+            debut = len(self.messages)
+            self.messages.append({"role": "user", "content": question})
+            try:
+                return repondre(self.messages, self.client)
+            except Exception:
+                del self.messages[debut:]
+                raise
+
+    def reinitialiser(self):
+        with self.verrou:
+            self.messages.clear()
+
+    def _limiter_historique(self):
+        debuts = [i for i, m in enumerate(self.messages) if m["role"] == "user" and isinstance(m["content"], str)]
+        if len(debuts) >= MAX_QUESTIONS:
+            del self.messages[:debuts[len(debuts) - MAX_QUESTIONS + 1]]
+
+
+def main():
+    DOSSIER.mkdir(parents=True, exist_ok=True)
+    conversation = Conversation(anthropic.Anthropic())
+    print("NoteBot prêt ! Pose ta question ('reset' pour recommencer, 'quitter' pour sortir).")
+
     while True:
-        question = input("\nToi : ").strip()
-        if question.lower() in ("quitter", "exit", "q"):
-            print("À plus !")
+        try:
+            question = input("\nToi : ").strip()
+        except (EOFError, KeyboardInterrupt):
             break
+        if question.lower() in ("quitter", "exit", "q"):
+            break
+        if question.lower() == "reset":
+            conversation.reinitialiser()
+            print("Conversation effacée.")
+            continue
         if not question:
             continue
 
-        debut = len(messages)
-        messages.append({"role": "user", "content": question})
         try:
-            print("\nNoteBot :", agent(messages, client))
+            texte, outils = conversation.envoyer(question)
         except anthropic.APIError as erreur:
-            del messages[debut:]
             print("\nErreur de l'API :", erreur)
+            continue
+        except TropDEtapes as erreur:
+            print("\nErreur :", erreur)
+            continue
+
+        for outil in outils:
+            print(f"  [outil] {outil['nom']}({outil['arguments']})")
+        print("\nNoteBot :", texte)
+
+    print("À plus !")
+
+
+if __name__ == "__main__":
+    main()
