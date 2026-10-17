@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -12,6 +13,8 @@ MAX_QUESTIONS = 20
 MAX_CARACTERES = 20000
 MAX_RESULTATS = 50
 EXTENSIONS = {".txt", ".md"}
+QUIZ_QUESTIONS = 5
+VERDICTS = {"correct": 1.0, "partiel": 0.5, "incorrect": 0.0}
 
 SYSTEME = (
     "Tu es NoteBot, un assistant qui aide un étudiant à réviser. "
@@ -164,10 +167,85 @@ class Conversation:
             del self.messages[:debuts[len(debuts) - MAX_QUESTIONS + 1]]
 
 
+# --------------------------------------------------------------------------
+# Mode quiz : NoteBot pose des questions tirées des notes et corrige
+# --------------------------------------------------------------------------
+
+def demande_question(numero, total, sujet):
+    portee = f"sur « {sujet} »" if sujet else "sur un sujet de mes notes de ton choix"
+    return (
+        f"Mode quiz, question {numero} sur {total}, {portee}. "
+        "Consulte mes notes avec les outils, puis pose-moi UNE seule question courte "
+        "dont la réponse se trouve dans mes notes. Ne donne pas la réponse, "
+        "et ne répète pas une question déjà posée dans ce quiz."
+    )
+
+
+def demande_correction(reponse):
+    return (
+        f"Ma réponse : {reponse}\n"
+        "Corrige-la en t'appuyant sur mes notes. Commence ta réponse EXACTEMENT par "
+        "une de ces lignes : « Verdict : correct », « Verdict : partiel » ou "
+        "« Verdict : incorrect ». Ensuite, donne la bonne réponse en deux ou trois "
+        "phrases et cite le fichier."
+    )
+
+
+def lire_verdict(texte):
+    """Retourne 'correct', 'partiel', 'incorrect', ou None si le verdict est absent."""
+    trouve = re.search(r"verdict\s*:\s*\**\s*(correct|partiel|incorrect)", texte, re.IGNORECASE)
+    return trouve.group(1).lower() if trouve else None
+
+
+def resume_score(verdicts):
+    notes = [VERDICTS[v] for v in verdicts if v in VERDICTS]
+    if not notes:
+        return "Quiz terminé : aucune réponse notée."
+    points = sum(notes)
+    total = len(notes)
+    pourcentage = round(100 * points / total)
+    affichage = f"{points:g}/{total}"
+    if pourcentage == 100:
+        bilan = "Parfait, tu maîtrises ce sujet !"
+    elif pourcentage >= 60:
+        bilan = "Bon travail. Relis les points marqués partiel ou incorrect."
+    else:
+        bilan = "Ce sujet mérite encore une révision. Relis tes notes puis refais un quiz."
+    return f"Quiz terminé : {affichage} ({pourcentage} %). {bilan}"
+
+
+def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, afficher=print):
+    """Pose `nombre` questions tirées des notes, corrige chaque réponse et affiche le score.
+
+    `demander` et `afficher` remplacent input/print (utile pour les tests ou une interface).
+    Tape 'stop' pendant le quiz pour l'arrêter. Retourne la liste des verdicts.
+    """
+    verdicts = []
+    afficher(f"\nQuiz de {nombre} questions{f' sur « {sujet} »' if sujet else ''}. Tape 'stop' pour arrêter.")
+    for numero in range(1, nombre + 1):
+        question, _ = conversation.envoyer(demande_question(numero, nombre, sujet))
+        afficher(f"\nQuestion {numero}/{nombre} : {question}")
+        try:
+            reponse = demander("Ta réponse : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if reponse.lower() in ("stop", "quitter", "q"):
+            break
+        if not reponse:
+            reponse = "je ne sais pas"
+        correction, _ = conversation.envoyer(demande_correction(reponse))
+        verdict = lire_verdict(correction)
+        verdicts.append(verdict)
+        afficher(f"\nNoteBot : {correction}")
+    afficher("\n" + resume_score(verdicts))
+    return verdicts
+
+
 def main():
     DOSSIER.mkdir(parents=True, exist_ok=True)
     conversation = Conversation(anthropic.Anthropic())
-    print("NoteBot prêt ! Pose ta question ('reset' pour recommencer, 'quitter' pour sortir).")
+    print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, "
+          "'reset' pour recommencer, 'quitter' pour sortir).")
 
     while True:
         try:
@@ -181,6 +259,14 @@ def main():
             print("Conversation effacée.")
             continue
         if not question:
+            continue
+        if question.lower() == "quiz" or question.lower().startswith("quiz "):
+            try:
+                lancer_quiz(conversation, question[4:].strip())
+            except anthropic.APIError as erreur:
+                print("\nErreur de l'API :", erreur)
+            except TropDEtapes as erreur:
+                print("\nErreur :", erreur)
             continue
 
         try:
