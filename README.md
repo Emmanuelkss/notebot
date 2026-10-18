@@ -29,6 +29,8 @@ NoteBot : Question 1 : ...
   - `lister_fichiers` : liste les notes disponibles ;
   - `lire_fichier` : lit le contenu d'un fichier ;
   - `chercher` : trouve un mot ou une expression dans toutes les notes, avec le fichier et le numéro de ligne.
+- **Mode quiz** : `quiz [sujet]` pose 5 questions tirées de tes notes, corrige chaque réponse (correct, partiel ou incorrect) et donne ton score à la fin.
+- **Fiches de révision** : `fiche <sujet>` rédige une fiche en Markdown à partir de tes notes (l'essentiel, définitions, règles et formules, exemple, pièges, 3 questions pour te tester, sources) et l'enregistre dans `fiches/`.
 - **Conversation continue** : le bot se souvient des questions précédentes. La commande `reset` repart de zéro.
 - **Coûts maîtrisés** : l'historique est limité aux 20 dernières questions, et le nombre d'étapes par réponse est plafonné.
 - **Robuste** : si un appel à l'API échoue, l'échange raté est annulé proprement et la conversation reste utilisable.
@@ -100,6 +102,7 @@ Variables optionnelles :
 |---|---|---|
 | `NOTEBOT_MODELE` | Modèle Claude utilisé | `claude-sonnet-5-5` |
 | `NOTEBOT_NOTES` | Dossier contenant les notes | `notes/` à côté du script |
+| `NOTEBOT_FICHES` | Dossier où sont enregistrées les fiches | `fiches/` à côté du script |
 
 Pour réduire les coûts, utilise `NOTEBOT_MODELE=claude-haiku-5-5`.
 
@@ -115,6 +118,8 @@ python script.py
 | Commande | Effet |
 |---|---|
 | *(ta question)* | NoteBot consulte tes notes et répond |
+| `quiz` ou `quiz <sujet>` | Quiz de 5 questions corrigées, avec score (`stop` pour arrêter) |
+| `fiche <sujet>` | Crée une fiche de révision dans `fiches/<sujet>.md` |
 | `reset` | Efface la conversation et recommence |
 | `quitter`, `exit` ou `q` | Ferme NoteBot |
 
@@ -122,8 +127,10 @@ python script.py
 
 ```text
 notebot/
-├── script.py     # Agent : outils, boucle d'agent, conversation et interface console
+├── script.py     # Agent : outils, boucle d'agent, conversation, quiz, fiches et interface console
+├── push.py       # Commit et push sur GitHub en une commande
 ├── notes/        # Tes fichiers de notes (.txt, .md), non versionnés
+├── fiches/       # Fiches de révision générées, non versionnées
 └── README.md
 ```
 
@@ -132,8 +139,16 @@ notebot/
 - [ ] API web (Flask) avec sessions, mot de passe et limite de requêtes
 - [ ] Interface web de chat
 - [ ] Prise en charge des notes en PDF
-- [ ] Génération de quiz et de fiches de révision
+- [x] Génération de quiz et de fiches de révision
 - [ ] Déploiement en ligne
+
+## Publier tes changements
+
+```bash
+python push.py "Décris ton changement"
+```
+
+Ajoute tous les changements, fait le commit et pousse la branche actuelle sur GitHub.
 
 ## Technologies
 
