@@ -122,7 +122,7 @@ python script.py
 |---|---|
 | *(ta question)* | NoteBot consulte tes notes et répond |
 | `quiz` ou `quiz <sujet>` | Quiz de 5 questions corrigées, avec score (`stop` pour arrêter) |
-| `fiche <sujet>` | Crée une fiche de révision dans `fiches/<sujet>.md` |
+| `fiche <sujet>` | Crée une fiche de révision dans `fiches/<sujet>.md` (une fiche existante n'est jamais écrasée : `<sujet>-2.md`, etc.) |
 | `reset` | Efface la conversation et recommence |
 | `quitter`, `exit` ou `q` | Ferme NoteBot |
 

@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import threading
+import unicodedata
 from pathlib import Path
 
 import anthropic
@@ -17,8 +18,10 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 MODELE = os.environ.get("NOTEBOT_MODELE", "claude-sonnet-5-5")
 DOSSIER = Path(os.environ.get("NOTEBOT_NOTES", Path(__file__).parent / "notes")).resolve()
+FICHES = Path(os.environ.get("NOTEBOT_FICHES", Path(__file__).parent / "fiches")).resolve()
 MAX_TOURS = 10
 MAX_TOKENS = 2048
+MAX_TOKENS_FICHE = 4096
 MAX_QUESTIONS = 20
 MAX_CARACTERES = 20000
 MAX_RESULTATS = 50
@@ -187,12 +190,12 @@ def executer_outil(nom, arguments):
         return f"Erreur : {erreur}"
 
 
-def repondre(messages, client):
+def repondre(messages, client, max_tokens=MAX_TOKENS):
     outils_utilises = []
     for _ in range(MAX_TOURS):
         reponse = client.messages.create(
             model=MODELE,
-            max_tokens=MAX_TOKENS,
+            max_tokens=max_tokens,
             system=SYSTEME,
             tools=OUTILS,
             messages=messages,
@@ -318,13 +321,86 @@ def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, a
     return verdicts
 
 
+# --------------------------------------------------------------------------
+# Fiches de révision : NoteBot résume un sujet de tes notes dans un fichier Markdown
+# --------------------------------------------------------------------------
+
+AUCUNE_NOTE = "AUCUNE_NOTE"
+
+
+def demande_fiche(sujet):
+    return (
+        f"Rédige une fiche de révision sur « {sujet} » à partir de mes notes. "
+        "Consulte d'abord mes notes avec les outils (cherche le sujet et ses mots-clés, puis lis les fichiers pertinents). "
+        f"Si mes notes ne parlent pas du tout de ce sujet, réponds uniquement : {AUCUNE_NOTE}\n\n"
+        "Sinon, réponds UNIQUEMENT avec la fiche en Markdown, sans phrase d'introduction, avec exactement ce plan :\n"
+        f"# Fiche : {sujet}\n"
+        "## L'essentiel\n(3 à 5 puces : ce qu'il faut absolument retenir)\n"
+        "## Définitions\n(les termes importants, une ligne chacun)\n"
+        "## Règles et formules\n(écris « Aucune dans tes notes. » s'il n'y en a pas)\n"
+        "## Exemple\n(un exemple concret, avec un bloc de code si c'est du code)\n"
+        "## Pièges à éviter\n(les erreurs fréquentes)\n"
+        "## Teste-toi\n(3 questions numérotées, sans les réponses)\n"
+        "## Sources\n(les fichiers utilisés, avec la ligne ou la page)\n\n"
+        "Reste fidèle à mes notes. Si tu ajoutes une information qui n'y est pas, marque-la avec « (hors notes) ». "
+        "Sois concis : la fiche doit tenir sur une page."
+    )
+
+
+def nom_fiche(sujet):
+    """Transforme un sujet en nom de fichier sûr, ex. « Les pointeurs C++ » -> 'les-pointeurs-c'."""
+    sans_accents = unicodedata.normalize("NFKD", sujet).encode("ascii", "ignore").decode()
+    nom = re.sub(r"[^a-z0-9]+", "-", sans_accents.lower()).strip("-")[:60].strip("-")
+    return nom or "fiche"
+
+
+def nettoyer_fiche(texte):
+    """Retire un éventuel texte avant le titre et les balises ```markdown autour de la fiche."""
+    texte = texte.strip()
+    texte = re.sub(r"^```(?:markdown|md)?\s*\n", "", texte)
+    texte = re.sub(r"\n```\s*$", "", texte)
+    debut = texte.find("# ")
+    return (texte[debut:] if debut > 0 else texte).strip() + "\n"
+
+
+def chemin_libre(nom):
+    """Retourne fiches/<nom>.md, ou <nom>-2.md, <nom>-3.md... pour ne jamais écraser une fiche."""
+    chemin = FICHES / f"{nom}.md"
+    numero = 2
+    while chemin.exists():
+        chemin = FICHES / f"{nom}-{numero}.md"
+        numero += 1
+    return chemin
+
+
+def creer_fiche(sujet, client, afficher=print):
+    """Rédige une fiche de révision sur `sujet` et l'enregistre dans le dossier des fiches.
+
+    La fiche est générée dans un échange séparé pour ne pas alourdir la conversation.
+    Retourne le chemin du fichier créé, ou None si les notes ne couvrent pas le sujet.
+    """
+    afficher(f"\nJe consulte tes notes pour rédiger la fiche « {sujet} »...")
+    texte, outils = repondre([{"role": "user", "content": demande_fiche(sujet)}], client, MAX_TOKENS_FICHE)
+    for outil in outils:
+        afficher(f"  [outil] {outil['nom']}({outil['arguments']})")
+    if AUCUNE_NOTE in texte or not texte.strip():
+        afficher(f"\nJe n'ai rien trouvé sur « {sujet} » dans tes notes, donc je n'ai pas créé de fiche. "
+                 "Essaie un autre mot-clé, ou ajoute des notes sur ce sujet.")
+        return None
+    FICHES.mkdir(parents=True, exist_ok=True)
+    chemin = chemin_libre(nom_fiche(sujet))
+    chemin.write_text(nettoyer_fiche(texte), encoding="utf-8")
+    afficher(f"\nFiche enregistrée : {chemin}")
+    return chemin
+
+
 def main():
     DOSSIER.mkdir(parents=True, exist_ok=True)
     if PdfReader is None and any(f.suffix.lower() == ".pdf" for f in fichiers_notes()):
         print("Attention : tu as des notes en PDF, mais le module pypdf n'est pas installé. "
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
-    print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, "
+    print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
           "'reset' pour recommencer, 'quitter' pour sortir).")
 
     while True:
@@ -339,6 +415,20 @@ def main():
             print("Conversation effacée.")
             continue
         if not question:
+            continue
+        if question.lower() == "fiche" or question.lower().startswith("fiche "):
+            sujet = question[5:].strip()
+            if not sujet:
+                print("Précise un sujet, par exemple : fiche pointeurs")
+                continue
+            try:
+                creer_fiche(sujet, conversation.client)
+            except anthropic.APIError as erreur:
+                print("\nErreur de l'API :", erreur)
+            except TropDEtapes as erreur:
+                print("\nErreur :", erreur)
+            except OSError as erreur:
+                print("\nImpossible d'enregistrer la fiche :", erreur)
             continue
         if question.lower() == "quiz" or question.lower().startswith("quiz "):
             try:
