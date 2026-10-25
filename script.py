@@ -1,9 +1,19 @@
+import logging
 import os
 import re
 import threading
 from pathlib import Path
 
 import anthropic
+
+try:
+    from pypdf import PdfReader
+except ImportError:  # pypdf est optionnel : sans lui, les PDF sont listés mais pas lus
+    PdfReader = None
+
+# pypdf écrit des avertissements techniques dans la console pour les PDF imparfaits ;
+# NoteBot gère déjà ces cas et affiche son propre message.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 MODELE = os.environ.get("NOTEBOT_MODELE", "claude-sonnet-5-5")
 DOSSIER = Path(os.environ.get("NOTEBOT_NOTES", Path(__file__).parent / "notes")).resolve()
@@ -12,7 +22,7 @@ MAX_TOKENS = 2048
 MAX_QUESTIONS = 20
 MAX_CARACTERES = 20000
 MAX_RESULTATS = 50
-EXTENSIONS = {".txt", ".md"}
+EXTENSIONS = {".txt", ".md", ".pdf"}
 QUIZ_QUESTIONS = 5
 VERDICTS = {"correct": 1.0, "partiel": 0.5, "incorrect": 0.0}
 
@@ -27,21 +37,21 @@ SYSTEME = (
 OUTILS = [
     {
         "name": "lister_fichiers",
-        "description": "Liste les fichiers de notes disponibles (.txt et .md).",
+        "description": "Liste les fichiers de notes disponibles (.txt, .md et .pdf).",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "lire_fichier",
-        "description": "Retourne le contenu complet d'un fichier de notes.",
+        "description": "Retourne le contenu complet d'un fichier de notes. Pour un PDF, le texte est découpé avec des marqueurs [Page N].",
         "input_schema": {
             "type": "object",
-            "properties": {"nom": {"type": "string", "description": "Nom du fichier, ex. 'pointeurs.txt'"}},
+            "properties": {"nom": {"type": "string", "description": "Nom du fichier, ex. 'pointeurs.txt' ou 'chapitre2.pdf'"}},
             "required": ["nom"],
         },
     },
     {
         "name": "chercher",
-        "description": "Cherche un mot ou une expression dans toutes les notes et retourne les lignes trouvées avec leur fichier et numéro de ligne.",
+        "description": "Cherche un mot ou une expression dans toutes les notes et retourne les lignes trouvées avec leur fichier et leur numéro de ligne (ou de page pour un PDF).",
         "input_schema": {
             "type": "object",
             "properties": {"texte": {"type": "string", "description": "Mot ou expression à chercher (insensible à la casse)"}},
@@ -55,10 +65,65 @@ class TropDEtapes(RuntimeError):
     pass
 
 
+class ErreurLecture(Exception):
+    """Une note existe mais son texte ne peut pas être extrait (PDF protégé, corrompu, etc.)."""
+
+
 def fichiers_notes():
     if not DOSSIER.is_dir():
         return []
     return sorted(f for f in DOSSIER.iterdir() if f.is_file() and f.suffix.lower() in EXTENSIONS)
+
+
+# --------------------------------------------------------------------------
+# Lecture des notes : texte brut ou PDF (avec cache, car extraire un PDF est lent)
+# --------------------------------------------------------------------------
+
+_cache_pdf = {}  # chemin -> (date de modification, [texte de chaque page])
+
+
+def pages_pdf(chemin):
+    """Retourne la liste du texte de chaque page d'un PDF. Le résultat est mis en cache
+    tant que le fichier n'est pas modifié, pour que `chercher` reste rapide."""
+    if PdfReader is None:
+        raise ErreurLecture("lire les PDF demande le module pypdf. Installe-le avec : pip install pypdf")
+    date = chemin.stat().st_mtime
+    en_cache = _cache_pdf.get(chemin)
+    if en_cache is None or en_cache[0] != date:
+        try:
+            lecteur = PdfReader(chemin)
+            if lecteur.is_encrypted and not lecteur.decrypt(""):
+                raise ErreurLecture(f"'{chemin.name}' est protégé par un mot de passe.")
+            resultat = [(page.extract_text() or "").strip() for page in lecteur.pages]
+        except ErreurLecture as erreur:
+            resultat = erreur
+        except Exception as erreur:  # pypdf lève des erreurs variées sur les PDF abîmés
+            resultat = ErreurLecture(f"impossible de lire '{chemin.name}' ({erreur}).")
+        # On garde aussi les échecs en cache pour ne pas relire un PDF abîmé à chaque recherche
+        en_cache = _cache_pdf[chemin] = (date, resultat)
+    if isinstance(en_cache[1], ErreurLecture):
+        raise en_cache[1]
+    return en_cache[1]
+
+
+def sections(chemin):
+    """Découpe une note en sections : une par page pour un PDF, une seule sinon.
+    Retourne une liste de (numéro de page ou None, texte)."""
+    if chemin.suffix.lower() == ".pdf":
+        return list(enumerate(pages_pdf(chemin), start=1))
+    return [(None, chemin.read_text(encoding="utf-8", errors="replace"))]
+
+
+def texte_note(chemin):
+    morceaux = sections(chemin)
+    if chemin.suffix.lower() != ".pdf":
+        return morceaux[0][1]
+    if not any(texte for _, texte in morceaux):
+        raise ErreurLecture(
+            f"aucun texte trouvé dans '{chemin.name}'. C'est sans doute un PDF numérisé (des images) : "
+            "il faudrait d'abord le passer dans un logiciel de reconnaissance de texte (OCR)."
+        )
+    return "\n\n".join(f"[Page {page}]\n{texte}" for page, texte in morceaux)
 
 
 def lister_fichiers():
@@ -72,7 +137,7 @@ def lire_fichier(nom):
         return "Erreur : fichier non autorisé."
     if not chemin.is_file():
         return f"Erreur : '{nom}' n'existe pas."
-    texte = chemin.read_text(encoding="utf-8", errors="replace")
+    texte = texte_note(chemin)
     if len(texte) > MAX_CARACTERES:
         return texte[:MAX_CARACTERES] + "\n[... contenu tronqué]"
     return texte
@@ -83,14 +148,24 @@ def chercher(texte):
     if not cible:
         return "Erreur : texte de recherche vide."
     resultats = []
+    illisibles = []
     for fichier in fichiers_notes():
-        lignes = fichier.read_text(encoding="utf-8", errors="replace").splitlines()
-        for numero, ligne in enumerate(lignes, start=1):
-            if cible in ligne.lower():
-                resultats.append(f"{fichier.name}:{numero}: {ligne.strip()}")
-                if len(resultats) >= MAX_RESULTATS:
-                    return "\n".join(resultats) + f"\n[... limité aux {MAX_RESULTATS} premiers résultats]"
-    return "\n".join(resultats) if resultats else f"Aucun résultat pour '{texte}'."
+        try:
+            morceaux = sections(fichier)
+        except ErreurLecture:
+            illisibles.append(fichier.name)
+            continue
+        for page, contenu in morceaux:
+            for numero, ligne in enumerate(contenu.splitlines(), start=1):
+                if cible in ligne.lower():
+                    position = f"page {page}" if page else str(numero)
+                    resultats.append(f"{fichier.name}:{position}: {ligne.strip()}")
+                    if len(resultats) >= MAX_RESULTATS:
+                        return "\n".join(resultats) + f"\n[... limité aux {MAX_RESULTATS} premiers résultats]"
+    texte_final = "\n".join(resultats) if resultats else f"Aucun résultat pour '{texte}'."
+    if illisibles:
+        texte_final += f"\n[Fichiers non lus : {', '.join(illisibles)}]"
+    return texte_final
 
 
 ACTIONS = {
@@ -106,6 +181,8 @@ def executer_outil(nom, arguments):
         return f"Erreur : outil inconnu '{nom}'."
     try:
         return action(**arguments)
+    except ErreurLecture as erreur:
+        return f"Erreur : {erreur}"
     except (TypeError, OSError) as erreur:
         return f"Erreur : {erreur}"
 
@@ -243,6 +320,9 @@ def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, a
 
 def main():
     DOSSIER.mkdir(parents=True, exist_ok=True)
+    if PdfReader is None and any(f.suffix.lower() == ".pdf" for f in fichiers_notes()):
+        print("Attention : tu as des notes en PDF, mais le module pypdf n'est pas installé. "
+              "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, "
           "'reset' pour recommencer, 'quitter' pour sortir).")

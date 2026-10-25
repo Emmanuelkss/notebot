@@ -27,15 +27,16 @@ NoteBot : Question 1 : ...
 - **Réponses fondées sur tes notes** : l'agent consulte tes fichiers avant de répondre et cite sa source.
 - **Trois outils** que le modèle choisit lui-même d'utiliser :
   - `lister_fichiers` : liste les notes disponibles ;
-  - `lire_fichier` : lit le contenu d'un fichier ;
-  - `chercher` : trouve un mot ou une expression dans toutes les notes, avec le fichier et le numéro de ligne.
+  - `lire_fichier` : lit le contenu d'un fichier (page par page pour un PDF) ;
+  - `chercher` : trouve un mot ou une expression dans toutes les notes, avec le fichier et le numéro de ligne (ou de page pour un PDF).
 - **Mode quiz** : `quiz [sujet]` pose 5 questions tirées de tes notes, corrige chaque réponse (correct, partiel ou incorrect) et donne ton score à la fin.
 - **Fiches de révision** : `fiche <sujet>` rédige une fiche en Markdown à partir de tes notes (l'essentiel, définitions, règles et formules, exemple, pièges, 3 questions pour te tester, sources) et l'enregistre dans `fiches/`.
 - **Conversation continue** : le bot se souvient des questions précédentes. La commande `reset` repart de zéro.
 - **Coûts maîtrisés** : l'historique est limité aux 20 dernières questions, et le nombre d'étapes par réponse est plafonné.
 - **Robuste** : si un appel à l'API échoue, l'échange raté est annulé proprement et la conversation reste utilisable.
 - **Sécuritaire** : l'agent n'a accès qu'au dossier `notes/`, en lecture seule. Les chemins comme `../` sont refusés.
-- Formats acceptés : `.txt` et `.md`.
+- **Notes en PDF** : NoteBot lit aussi tes PDF (diapos, notes exportées). Il cite la page où il a trouvé l'information, par exemple `chapitre3.pdf:page 4`. Les PDF protégés par mot de passe, abîmés ou numérisés (images sans texte) sont signalés clairement au lieu de faire planter le bot.
+- Formats acceptés : `.txt`, `.md` et `.pdf`.
 
 ## Fonctionnement
 
@@ -78,11 +79,13 @@ Active l'environnement virtuel :
 source .venv/bin/activate
 ```
 
-Installe la dépendance :
+Installe les dépendances :
 
 ```bash
-pip install anthropic
+pip install -r requirements.txt
 ```
+
+`pypdf` sert uniquement à lire les notes en PDF. Sans lui, NoteBot fonctionne quand même avec tes `.txt` et `.md`, et te rappelle de l'installer si tu as des PDF.
 
 ## Configuration
 
@@ -108,7 +111,7 @@ Pour réduire les coûts, utilise `NOTEBOT_MODELE=claude-haiku-5-5`.
 
 ## Utilisation
 
-1. Place tes notes (`.txt` ou `.md`) dans le dossier `notes/`. Il est créé automatiquement au premier lancement.
+1. Place tes notes (`.txt`, `.md` ou `.pdf`) dans le dossier `notes/`. Il est créé automatiquement au premier lancement.
 2. Lance NoteBot :
 
 ```bash
@@ -129,7 +132,8 @@ python script.py
 notebot/
 ├── script.py     # Agent : outils, boucle d'agent, conversation, quiz, fiches et interface console
 ├── push.py       # Commit et push sur GitHub en une commande
-├── notes/        # Tes fichiers de notes (.txt, .md), non versionnés
+├── requirements.txt  # Dépendances Python (anthropic, pypdf)
+├── notes/        # Tes fichiers de notes (.txt, .md, .pdf), non versionnés
 ├── fiches/       # Fiches de révision générées, non versionnées
 └── README.md
 ```
@@ -138,7 +142,7 @@ notebot/
 
 - [ ] API web (Flask) avec sessions, mot de passe et limite de requêtes
 - [ ] Interface web de chat
-- [ ] Prise en charge des notes en PDF
+- [x] Prise en charge des notes en PDF
 - [x] Génération de quiz et de fiches de révision
 - [ ] Déploiement en ligne
 
@@ -154,6 +158,7 @@ Ajoute tous les changements, fait le commit et pousse la branche actuelle sur Gi
 
 - **Python**
 - **[API Claude d'Anthropic](https://platform.claude.com/docs)** : modèles Claude et utilisation d'outils (*tool use*)
+- **[pypdf](https://pypi.org/project/pypdf/)** : extraction du texte des notes en PDF
 
 ## Auteur
 
