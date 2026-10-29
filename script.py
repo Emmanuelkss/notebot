@@ -200,11 +200,19 @@ def repondre(messages, client, max_tokens=MAX_TOKENS):
             tools=OUTILS,
             messages=messages,
         )
-        messages.append({"role": "assistant", "content": reponse.content})
-
         if reponse.stop_reason != "tool_use":
-            texte = "".join(bloc.text for bloc in reponse.content if bloc.type == "text")
+            # Réponse finale. Si elle a été coupée (max_tokens) pendant un appel d'outil, le
+            # bloc tool_use n'a jamais de tool_result : le garder dans l'historique ferait
+            # échouer toutes les questions suivantes. On ne conserve donc que le texte.
+            textes = [bloc for bloc in reponse.content if bloc.type == "text"]
+            texte = "".join(bloc.text for bloc in textes)
+            if reponse.stop_reason == "max_tokens":
+                texte = (texte.rstrip() + "\n\n[Réponse coupée : limite de longueur atteinte. "
+                         "Demande la suite ou pose une question plus précise.]").lstrip()
+            messages.append({"role": "assistant", "content": textes or texte or "(réponse vide)"})
             return texte, outils_utilises
+
+        messages.append({"role": "assistant", "content": reponse.content})
 
         resultats = []
         for bloc in reponse.content:
@@ -359,8 +367,10 @@ def nettoyer_fiche(texte):
     texte = texte.strip()
     texte = re.sub(r"^```(?:markdown|md)?\s*\n", "", texte)
     texte = re.sub(r"\n```\s*$", "", texte)
-    debut = texte.find("# ")
-    return (texte[debut:] if debut > 0 else texte).strip() + "\n"
+    # Cherche un vrai titre en début de ligne (« # Fiche… »), pas un « # » au milieu
+    # d'une phrase comme « Voici ta fiche sur C# : ».
+    titre = re.search(r"^# ", texte, re.MULTILINE)
+    return (texte[titre.start():] if titre else texte).strip() + "\n"
 
 
 def chemin_libre(nom):
