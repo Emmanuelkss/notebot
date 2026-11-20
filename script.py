@@ -1,3 +1,5 @@
+import datetime as dt
+import json
 import logging
 import os
 import re
@@ -19,6 +21,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 MODELE = os.environ.get("NOTEBOT_MODELE", "claude-sonnet-5-5")
 DOSSIER = Path(os.environ.get("NOTEBOT_NOTES", Path(__file__).parent / "notes")).resolve()
 FICHES = Path(os.environ.get("NOTEBOT_FICHES", Path(__file__).parent / "fiches")).resolve()
+PROGRES = Path(os.environ.get("NOTEBOT_PROGRES", Path(__file__).parent / "progres.json")).resolve()
 MAX_TOURS = 10
 MAX_TOKENS = 2048
 MAX_TOKENS_FICHE = 4096
@@ -285,12 +288,16 @@ def lire_verdict(texte):
     return trouve.group(1).lower() if trouve else None
 
 
-def resume_score(verdicts):
+def points_quiz(verdicts):
+    """Retourne (points, nombre de réponses notées). Les verdicts absents ne comptent pas."""
     notes = [VERDICTS[v] for v in verdicts if v in VERDICTS]
-    if not notes:
+    return sum(notes), len(notes)
+
+
+def resume_score(verdicts):
+    points, total = points_quiz(verdicts)
+    if not total:
         return "Quiz terminé : aucune réponse notée."
-    points = sum(notes)
-    total = len(notes)
     pourcentage = round(100 * points / total)
     affichage = f"{points:g}/{total}"
     if pourcentage == 100:
@@ -327,6 +334,82 @@ def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, a
         afficher(f"\nNoteBot : {correction}")
     afficher("\n" + resume_score(verdicts))
     return verdicts
+
+
+# --------------------------------------------------------------------------
+# Progression : chaque quiz est enregistré pour suivre ses points faibles
+# --------------------------------------------------------------------------
+
+SUJET_GENERAL = "sujets variés"
+SEUIL_A_REVOIR = 60
+
+
+def charger_progres(fichier=None):
+    """Lit l'historique des quiz. Un fichier absent ou abîmé donne une liste vide."""
+    fichier = fichier or PROGRES
+    try:
+        donnees = json.loads(fichier.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(donnees, list):
+        return []
+    return [d for d in donnees if isinstance(d, dict) and {"sujet", "points", "total"} <= d.keys()
+            and isinstance(d["total"], int) and d["total"] > 0]
+
+
+def enregistrer_quiz(sujet, verdicts, fichier=None, date=None):
+    """Ajoute le résultat d'un quiz à l'historique. Un quiz sans réponse notée n'est pas gardé.
+    Retourne True si le résultat a été enregistré."""
+    fichier = fichier or PROGRES
+    points, total = points_quiz(verdicts)
+    if not total:
+        return False
+    historique = charger_progres(fichier)
+    historique.append({
+        "date": (date or dt.datetime.now()).isoformat(timespec="minutes"),
+        "sujet": sujet.strip() or SUJET_GENERAL,
+        "points": points,
+        "total": total,
+    })
+    fichier.parent.mkdir(parents=True, exist_ok=True)
+    fichier.write_text(json.dumps(historique, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
+def resume_progres(historique):
+    """Tableau par sujet : nombre de quiz, dernier score, meilleur score et tendance.
+    Les sujets les plus faibles sont affichés en premier."""
+    if not historique:
+        return "Aucun quiz enregistré pour l'instant. Lance 'quiz <sujet>' pour commencer."
+
+    par_sujet = {}
+    for quiz in historique:  # l'historique est dans l'ordre chronologique
+        cle = quiz["sujet"].strip().lower()
+        scores = par_sujet.get(cle, (None, []))[1]
+        scores.append(round(100 * quiz["points"] / quiz["total"]))
+        par_sujet[cle] = (quiz["sujet"], scores)  # on garde l'écriture la plus récente
+
+    lignes = ["Ta progression (sujets les plus faibles en premier) :", ""]
+    a_revoir = []
+    for nom, scores in sorted(par_sujet.values(), key=lambda x: (x[1][-1], x[0].lower())):
+        dernier = scores[-1]
+        if len(scores) == 1:
+            tendance = ""
+        elif dernier > scores[-2]:
+            tendance = f"  ↑ +{dernier - scores[-2]}"
+        elif dernier < scores[-2]:
+            tendance = f"  ↓ {dernier - scores[-2]}"
+        else:
+            tendance = "  ="
+        lignes.append(f"- {nom} : {dernier} % au dernier quiz, meilleur {max(scores)} % "
+                      f"({len(scores)} quiz){tendance}")
+        if dernier < SEUIL_A_REVOIR and nom != SUJET_GENERAL:
+            a_revoir.append(nom)
+
+    if a_revoir:
+        lignes += ["", f"À réviser en priorité : {', '.join(a_revoir)}. "
+                       f"Essaie 'fiche {a_revoir[0]}' puis refais un quiz."]
+    return "\n".join(lignes)
 
 
 # --------------------------------------------------------------------------
@@ -411,7 +494,7 @@ def main():
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'reset' pour recommencer, 'quitter' pour sortir).")
+          "'progres' pour voir tes résultats, 'reset' pour recommencer, 'quitter' pour sortir).")
 
     while True:
         try:
@@ -425,6 +508,9 @@ def main():
             print("Conversation effacée.")
             continue
         if not question:
+            continue
+        if question.lower() in ("progres", "progrès"):
+            print("\n" + resume_progres(charger_progres()))
             continue
         if question.lower() == "fiche" or question.lower().startswith("fiche "):
             sujet = question[5:].strip()
@@ -441,12 +527,20 @@ def main():
                 print("\nImpossible d'enregistrer la fiche :", erreur)
             continue
         if question.lower() == "quiz" or question.lower().startswith("quiz "):
+            sujet = question[4:].strip()
             try:
-                lancer_quiz(conversation, question[4:].strip())
+                verdicts = lancer_quiz(conversation, sujet)
             except anthropic.APIError as erreur:
                 print("\nErreur de l'API :", erreur)
+                continue
             except TropDEtapes as erreur:
                 print("\nErreur :", erreur)
+                continue
+            try:
+                if enregistrer_quiz(sujet, verdicts):
+                    print("Résultat enregistré. Tape 'progres' pour voir ton évolution.")
+            except OSError as erreur:
+                print("\nImpossible d'enregistrer le résultat du quiz :", erreur)
             continue
 
         try:

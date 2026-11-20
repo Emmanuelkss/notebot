@@ -30,6 +30,7 @@ NoteBot : Question 1 : ...
   - `lire_fichier` : lit le contenu d'un fichier (page par page pour un PDF) ;
   - `chercher` : trouve un mot ou une expression dans toutes les notes, avec le fichier et le numéro de ligne (ou de page pour un PDF).
 - **Mode quiz** : `quiz [sujet]` pose 5 questions tirées de tes notes, corrige chaque réponse (correct, partiel ou incorrect) et donne ton score à la fin.
+- **Suivi de progression** : chaque quiz est enregistré dans `progres.json`. La commande `progres` montre, pour chaque sujet, ton dernier score, ton meilleur score et ta tendance, avec les sujets les plus faibles en premier et ceux à réviser en priorité.
 - **Fiches de révision** : `fiche <sujet>` rédige une fiche en Markdown à partir de tes notes (l'essentiel, définitions, règles et formules, exemple, pièges, 3 questions pour te tester, sources) et l'enregistre dans `fiches/`.
 - **Conversation continue** : le bot se souvient des questions précédentes. La commande `reset` repart de zéro.
 - **Coûts maîtrisés** : l'historique est limité aux 20 dernières questions, et le nombre d'étapes par réponse est plafonné.
@@ -106,6 +107,7 @@ Variables optionnelles :
 | `NOTEBOT_MODELE` | Modèle Claude utilisé | `claude-sonnet-5-5` |
 | `NOTEBOT_NOTES` | Dossier contenant les notes | `notes/` à côté du script |
 | `NOTEBOT_FICHES` | Dossier où sont enregistrées les fiches | `fiches/` à côté du script |
+| `NOTEBOT_PROGRES` | Fichier où sont enregistrés les résultats des quiz | `progres.json` à côté du script |
 
 Pour réduire les coûts, utilise `NOTEBOT_MODELE=claude-haiku-5-5`.
 
@@ -123,6 +125,7 @@ python script.py
 | *(ta question)* | NoteBot consulte tes notes et répond |
 | `quiz` ou `quiz <sujet>` | Quiz de 5 questions corrigées, avec score (`stop` pour arrêter) |
 | `fiche <sujet>` | Crée une fiche de révision dans `fiches/<sujet>.md` (une fiche existante n'est jamais écrasée : `<sujet>-2.md`, etc.) |
+| `progres` | Affiche tes résultats de quiz par sujet et ce qu'il faut réviser en priorité |
 | `reset` | Efface la conversation et recommence |
 | `quitter`, `exit` ou `q` | Ferme NoteBot |
 
@@ -135,6 +138,7 @@ notebot/
 ├── requirements.txt  # Dépendances Python (anthropic, pypdf)
 ├── notes/        # Tes fichiers de notes (.txt, .md, .pdf), non versionnés
 ├── fiches/       # Fiches de révision générées, non versionnées
+├── progres.json  # Résultats de tes quiz, non versionné
 └── README.md
 ```
 
