@@ -21,6 +21,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 MODELE = os.environ.get("NOTEBOT_MODELE", "claude-sonnet-5-5")
 DOSSIER = Path(os.environ.get("NOTEBOT_NOTES", Path(__file__).parent / "notes")).resolve()
 FICHES = Path(os.environ.get("NOTEBOT_FICHES", Path(__file__).parent / "fiches")).resolve()
+CONVERSATIONS = Path(os.environ.get("NOTEBOT_CONVERSATIONS", Path(__file__).parent / "conversations")).resolve()
 PROGRES = Path(os.environ.get("NOTEBOT_PROGRES", Path(__file__).parent / "progres.json")).resolve()
 MAX_TOURS = 10
 MAX_TOKENS = 2048
@@ -248,6 +249,11 @@ class Conversation:
                 del self.messages[debut:]
                 raise
 
+    def echanges(self):
+        """Retourne la conversation sous forme de [(message de l'étudiant, réponse finale de NoteBot)]."""
+        with self.verrou:
+            return echanges(self.messages)
+
     def reinitialiser(self):
         with self.verrou:
             self.messages.clear()
@@ -256,6 +262,69 @@ class Conversation:
         debuts = [i for i, m in enumerate(self.messages) if m["role"] == "user" and isinstance(m["content"], str)]
         if len(debuts) >= MAX_QUESTIONS:
             del self.messages[:debuts[len(debuts) - MAX_QUESTIONS + 1]]
+
+
+# --------------------------------------------------------------------------
+# Export : enregistre la conversation dans un fichier Markdown
+# --------------------------------------------------------------------------
+
+def texte_message(contenu):
+    """Extrait le texte d'un message : une chaîne, ou une liste de blocs (objets de l'API ou dict)."""
+    if isinstance(contenu, str):
+        return contenu
+    morceaux = []
+    for bloc in contenu:
+        if isinstance(bloc, dict):
+            if bloc.get("type") == "text":
+                morceaux.append(bloc.get("text", ""))
+        elif getattr(bloc, "type", None) == "text":
+            morceaux.append(bloc.text)
+    return "".join(morceaux)
+
+
+def echanges(messages):
+    """Regroupe l'historique en (question, réponse). Les appels d'outils sont ignorés : pour chaque
+    question, on garde seulement le dernier message de NoteBot, c'est-à-dire sa réponse finale."""
+    resultat = []
+    for message in messages:
+        if message["role"] == "user" and isinstance(message["content"], str):
+            resultat.append([message["content"], ""])
+        elif message["role"] == "assistant" and resultat:
+            resultat[-1][1] = texte_message(message["content"])
+    return [(question, reponse) for question, reponse in resultat]
+
+
+def question_affichee(question):
+    """Remplace les consignes internes du quiz par un texte lisible dans l'export."""
+    if question.startswith("Mode quiz, question "):
+        numero = re.match(r"Mode quiz, question (\d+ sur \d+)", question)
+        return f"*Quiz : question {numero.group(1)}*" if numero else "*Quiz*"
+    if question.startswith("Ma réponse : "):
+        return "Ma réponse : " + question[len("Ma réponse : "):].split("\n", 1)[0]
+    return question
+
+
+def conversation_markdown(liste, date=None):
+    date = date or dt.datetime.now()
+    lignes = [f"# Conversation NoteBot du {date:%d/%m/%Y à %H:%M}", ""]
+    for question, reponse in liste:
+        lignes += ["## Toi", "", question_affichee(question), "", "## NoteBot", "",
+                   reponse.strip() or "*(pas de réponse)*", ""]
+    return "\n".join(lignes)
+
+
+def exporter_conversation(conversation, dossier=None, date=None):
+    """Enregistre la conversation dans <dossier>/AAAA-MM-JJ_HHhMM.md.
+    Retourne le chemin créé, ou None si la conversation est vide."""
+    liste = conversation.echanges()
+    if not liste:
+        return None
+    dossier = dossier or CONVERSATIONS
+    date = date or dt.datetime.now()
+    dossier.mkdir(parents=True, exist_ok=True)
+    chemin = chemin_libre(f"{date:%Y-%m-%d_%Hh%M}", dossier)
+    chemin.write_text(conversation_markdown(liste, date), encoding="utf-8")
+    return chemin
 
 
 # --------------------------------------------------------------------------
@@ -456,12 +525,14 @@ def nettoyer_fiche(texte):
     return (texte[titre.start():] if titre else texte).strip() + "\n"
 
 
-def chemin_libre(nom):
-    """Retourne fiches/<nom>.md, ou <nom>-2.md, <nom>-3.md... pour ne jamais écraser une fiche."""
-    chemin = FICHES / f"{nom}.md"
+def chemin_libre(nom, dossier=None):
+    """Retourne <dossier>/<nom>.md, ou <nom>-2.md, <nom>-3.md... pour ne jamais écraser un fichier.
+    Le dossier par défaut est celui des fiches."""
+    dossier = dossier or FICHES
+    chemin = dossier / f"{nom}.md"
     numero = 2
     while chemin.exists():
-        chemin = FICHES / f"{nom}-{numero}.md"
+        chemin = dossier / f"{nom}-{numero}.md"
         numero += 1
     return chemin
 
@@ -494,7 +565,7 @@ def main():
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'progres' pour voir tes résultats, 'reset' pour recommencer, 'quitter' pour sortir).")
+          "'progres' pour voir tes résultats, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
 
     while True:
         try:
@@ -508,6 +579,14 @@ def main():
             print("Conversation effacée.")
             continue
         if not question:
+            continue
+        if question.lower() == "export":
+            try:
+                chemin = exporter_conversation(conversation)
+            except OSError as erreur:
+                print("\nImpossible d'enregistrer la conversation :", erreur)
+                continue
+            print(f"\nConversation enregistrée : {chemin}" if chemin else "\nRien à exporter : pose d'abord une question.")
             continue
         if question.lower() in ("progres", "progrès"):
             print("\n" + resume_progres(charger_progres()))
