@@ -482,6 +482,56 @@ def resume_progres(historique):
 
 
 # --------------------------------------------------------------------------
+# Révision espacée : plus un sujet est maîtrisé, plus on attend avant de le revoir
+# --------------------------------------------------------------------------
+
+# (score minimum en %, nombre de jours avant de refaire un quiz), du plus haut au plus bas
+INTERVALLES = ((100, 14), (80, 7), (60, 3), (0, 1))
+
+
+def intervalle(score):
+    """Nombre de jours à attendre avant de revoir un sujet, selon le dernier score."""
+    return next(jours for minimum, jours in INTERVALLES if score >= minimum)
+
+
+def sujets_a_revoir(historique, aujourdhui=None):
+    """Retourne les sujets dont la date de révision est arrivée, sous forme de
+    [(sujet, dernier score, jours de retard)], les plus en retard en premier.
+    Les quiz « sujets variés » et ceux sans date valide sont ignorés."""
+    aujourdhui = aujourdhui or dt.date.today()
+    derniers = {}  # sujet en minuscules -> (sujet, date, score) du quiz le plus récent
+    for quiz in historique:
+        if quiz["sujet"] == SUJET_GENERAL:
+            continue
+        try:
+            date = dt.datetime.fromisoformat(quiz["date"]).date()
+        except (KeyError, TypeError, ValueError):
+            continue
+        cle = quiz["sujet"].strip().lower()
+        if cle not in derniers or date >= derniers[cle][1]:
+            derniers[cle] = (quiz["sujet"], date, round(100 * quiz["points"] / quiz["total"]))
+
+    resultat = []
+    for sujet, date, score in derniers.values():
+        retard = (aujourdhui - date).days - intervalle(score)
+        if retard >= 0:
+            resultat.append((sujet, score, retard))
+    return sorted(resultat, key=lambda x: (-x[2], x[1], x[0].lower()))
+
+
+def resume_revision(a_revoir):
+    if not a_revoir:
+        return ("Rien à revoir aujourd'hui. Les sujets reviennent ici quand il est temps "
+                "de refaire un quiz : 1 jour après un score sous 60 %, puis 3, 7 ou 14 jours selon ton score.")
+    lignes = ["À revoir aujourd'hui :", ""]
+    for sujet, score, retard in a_revoir:
+        quand = "prévu aujourd'hui" if retard == 0 else f"en retard de {retard} jour{'s' if retard > 1 else ''}"
+        lignes.append(f"- {sujet} : {score} % au dernier quiz, {quand}")
+    lignes += ["", f"Commence par : quiz {a_revoir[0][0]}"]
+    return "\n".join(lignes)
+
+
+# --------------------------------------------------------------------------
 # Fiches de révision : NoteBot résume un sujet de tes notes dans un fichier Markdown
 # --------------------------------------------------------------------------
 
@@ -565,7 +615,12 @@ def main():
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'progres' pour voir tes résultats, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
+          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
+    a_revoir = sujets_a_revoir(charger_progres())
+    if a_revoir:
+        noms = ", ".join(sujet for sujet, _, _ in a_revoir)
+        print(f"Rappel : {len(a_revoir)} sujet{'s' if len(a_revoir) > 1 else ''} à revoir aujourd'hui ({noms}). "
+              "Tape 'revoir' pour les détails.")
 
     while True:
         try:
@@ -587,6 +642,9 @@ def main():
                 print("\nImpossible d'enregistrer la conversation :", erreur)
                 continue
             print(f"\nConversation enregistrée : {chemin}" if chemin else "\nRien à exporter : pose d'abord une question.")
+            continue
+        if question.lower() == "revoir":
+            print("\n" + resume_revision(sujets_a_revoir(charger_progres())))
             continue
         if question.lower() in ("progres", "progrès"):
             print("\n" + resume_progres(charger_progres()))
