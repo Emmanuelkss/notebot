@@ -33,6 +33,7 @@ NoteBot : Question 1 : ...
 - **Suivi de progression** : chaque quiz est enregistré dans `progres.json`. La commande `progres` montre, pour chaque sujet, ton dernier score, ton meilleur score et ta tendance, avec les sujets les plus faibles en premier et ceux à réviser en priorité.
 - **Fiches de révision** : `fiche <sujet>` rédige une fiche en Markdown à partir de tes notes (l'essentiel, définitions, règles et formules, exemple, pièges, 3 questions pour te tester, sources) et l'enregistre dans `fiches/`.
 - **Révision espacée** : selon ton dernier score à chaque sujet, NoteBot calcule quand refaire un quiz (1 jour sous 60 %, 3 jours sous 80 %, 7 jours sous 100 %, 14 jours à 100 %). La commande `revoir` liste les sujets à revoir aujourd'hui, les plus en retard en premier, et NoteBot te les rappelle à son démarrage.
+- **Commandes rapides, sans API** : `notes` liste tes notes (taille, date de modification, nombre de pages des PDF, et PDF illisibles signalés), et `cherche <mot>` trouve un mot dans toutes tes notes. Les deux répondent instantanément et ne coûtent rien.
 - **Export de la conversation** : `export` enregistre tes questions et les réponses de NoteBot dans un fichier Markdown (`conversations/AAAA-MM-JJ_HHhMM.md`), sans les détails techniques des outils, pour relire une séance de révision plus tard.
 - **Conversation continue** : le bot se souvient des questions précédentes. La commande `reset` repart de zéro.
 - **Coûts maîtrisés** : l'historique est limité aux 20 dernières questions, et le nombre d'étapes par réponse est plafonné.
@@ -129,6 +130,8 @@ python script.py
 | `quiz` ou `quiz <sujet>` | Quiz de 5 questions corrigées, avec score (`stop` pour arrêter) |
 | `fiche <sujet>` | Crée une fiche de révision dans `fiches/<sujet>.md` (une fiche existante n'est jamais écrasée : `<sujet>-2.md`, etc.) |
 | `progres` | Affiche tes résultats de quiz par sujet et ce qu'il faut réviser en priorité |
+| `notes` | Liste tes notes, sans appel à l'API |
+| `cherche <mot>` | Recherche rapide du texte exact dans tes notes, sans appel à l'API |
 | `revoir` | Liste les sujets à revoir aujourd'hui (révision espacée) |
 | `export` | Enregistre la conversation dans `conversations/` |
 | `reset` | Efface la conversation et recommence |

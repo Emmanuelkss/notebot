@@ -175,6 +175,51 @@ def chercher(texte):
     return texte_final
 
 
+# --------------------------------------------------------------------------
+# Commandes rapides : 'notes' et 'cherche' fonctionnent sans appel à l'API
+# --------------------------------------------------------------------------
+
+def taille_lisible(octets):
+    for unite, taille in (("Mo", 1024 ** 2), ("Ko", 1024)):
+        if octets >= taille:
+            return f"{octets / taille:.1f} {unite}".replace(".", ",")
+    return f"{octets} o"
+
+
+def resume_notes():
+    """Liste les notes avec leur taille, leur date de modification et, pour un PDF, son nombre de pages."""
+    fichiers = fichiers_notes()
+    if not fichiers:
+        return f"Aucune note pour l'instant. Ajoute des fichiers .txt, .md ou .pdf dans : {DOSSIER}"
+    lignes = [f"{len(fichiers)} note{'s' if len(fichiers) > 1 else ''} dans {DOSSIER} :", ""]
+    for chemin in fichiers:
+        infos = chemin.stat()
+        details = [taille_lisible(infos.st_size),
+                   f"modifié le {dt.datetime.fromtimestamp(infos.st_mtime):%d/%m/%Y}"]
+        if chemin.suffix.lower() == ".pdf":
+            try:
+                pages = pages_pdf(chemin)
+                details.insert(0, f"{len(pages)} page{'s' if len(pages) > 1 else ''}")
+                if not any(pages):
+                    details.append("aucun texte (PDF numérisé ?)")
+            except ErreurLecture as erreur:
+                details.append(f"illisible : {erreur}")
+        lignes.append(f"- {chemin.name} ({', '.join(details)})")
+    return "\n".join(lignes)
+
+
+def recherche_rapide(texte):
+    """Lance l'outil `chercher` directement, et aide l'étudiant si rien n'est trouvé."""
+    texte = texte.strip()
+    if not texte:
+        return "Précise ce que tu cherches, par exemple : cherche nullptr"
+    resultat = chercher(texte)
+    if resultat.startswith("Aucun résultat"):
+        resultat += ("\nAstuce : 'cherche' trouve le texte exact. Essaie un mot plus court, "
+                     "ou pose ta question sans 'cherche' devant pour que NoteBot t'aide.")
+    return resultat
+
+
 ACTIONS = {
     "lister_fichiers": lister_fichiers,
     "lire_fichier": lire_fichier,
@@ -615,7 +660,7 @@ def main():
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
+          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'notes' pour lister tes notes, 'cherche <mot>' pour une recherche rapide, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
     a_revoir = sujets_a_revoir(charger_progres())
     if a_revoir:
         noms = ", ".join(sujet for sujet, _, _ in a_revoir)
@@ -642,6 +687,12 @@ def main():
                 print("\nImpossible d'enregistrer la conversation :", erreur)
                 continue
             print(f"\nConversation enregistrée : {chemin}" if chemin else "\nRien à exporter : pose d'abord une question.")
+            continue
+        if question.lower() == "notes":
+            print("\n" + resume_notes())
+            continue
+        if question.lower() == "cherche" or question.lower().startswith("cherche "):
+            print("\n" + recherche_rapide(question[7:]))
             continue
         if question.lower() == "revoir":
             print("\n" + resume_revision(sujets_a_revoir(charger_progres())))
