@@ -34,6 +34,7 @@ NoteBot : Question 1 : ...
 - **Fiches de révision** : `fiche <sujet>` rédige une fiche en Markdown à partir de tes notes (l'essentiel, définitions, règles et formules, exemple, pièges, 3 questions pour te tester, sources) et l'enregistre dans `fiches/`.
 - **Révision espacée** : selon ton dernier score à chaque sujet, NoteBot calcule quand refaire un quiz (1 jour sous 60 %, 3 jours sous 80 %, 7 jours sous 100 %, 14 jours à 100 %). La commande `revoir` liste les sujets à revoir aujourd'hui, les plus en retard en premier, et NoteBot te les rappelle à son démarrage.
 - **Commandes rapides, sans API** : `notes` liste tes notes (taille, date de modification, nombre de pages des PDF, et PDF illisibles signalés), et `cherche <mot>` trouve un mot dans toutes tes notes. Les deux répondent instantanément et ne coûtent rien.
+- **Suivi de la consommation** : `conso` affiche le nombre d'appels à l'API et de tokens utilisés depuis le lancement (y compris pour les quiz et les fiches). Un résumé s'affiche aussi quand tu quittes. Si tu indiques les prix de ton modèle, NoteBot estime le coût de la séance.
 - **Export de la conversation** : `export` enregistre tes questions et les réponses de NoteBot dans un fichier Markdown (`conversations/AAAA-MM-JJ_HHhMM.md`), sans les détails techniques des outils, pour relire une séance de révision plus tard.
 - **Conversation continue** : le bot se souvient des questions précédentes. La commande `reset` repart de zéro.
 - **Coûts maîtrisés** : l'historique est limité aux 20 dernières questions, et le nombre d'étapes par réponse est plafonné.
@@ -111,9 +112,11 @@ Variables optionnelles :
 | `NOTEBOT_NOTES` | Dossier contenant les notes | `notes/` à côté du script |
 | `NOTEBOT_FICHES` | Dossier où sont enregistrées les fiches | `fiches/` à côté du script |
 | `NOTEBOT_CONVERSATIONS` | Dossier où sont enregistrées les conversations exportées | `conversations/` à côté du script |
+| `NOTEBOT_PRIX_ENTREE` | Prix des tokens envoyés, en $ par million (pour estimer le coût) | aucun |
+| `NOTEBOT_PRIX_SORTIE` | Prix des tokens générés, en $ par million (pour estimer le coût) | aucun |
 | `NOTEBOT_PROGRES` | Fichier où sont enregistrés les résultats des quiz | `progres.json` à côté du script |
 
-Pour réduire les coûts, utilise `NOTEBOT_MODELE=claude-haiku-5-5`.
+Pour réduire les coûts, utilise `NOTEBOT_MODELE=claude-haiku-5-5`. Les prix de chaque modèle sont sur la [page des tarifs](https://claude.com/pricing#api) ; le coût affiché par `conso` reste une estimation (les tokens en cache, par exemple, sont facturés à un autre tarif).
 
 ## Utilisation
 
@@ -133,6 +136,7 @@ python script.py
 | `notes` | Liste tes notes, sans appel à l'API |
 | `cherche <mot>` | Recherche rapide du texte exact dans tes notes, sans appel à l'API |
 | `revoir` | Liste les sujets à revoir aujourd'hui (révision espacée) |
+| `conso` | Affiche les appels et les tokens utilisés pendant la séance |
 | `export` | Enregistre la conversation dans `conversations/` |
 | `reset` | Efface la conversation et recommence |
 | `quitter`, `exit` ou `q` | Ferme NoteBot |

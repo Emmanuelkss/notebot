@@ -239,6 +239,62 @@ def executer_outil(nom, arguments):
         return f"Erreur : {erreur}"
 
 
+# --------------------------------------------------------------------------
+# Consommation : tokens utilisés depuis le lancement de NoteBot
+# --------------------------------------------------------------------------
+
+def prix_env(nom):
+    """Lit un prix en dollars par million de tokens (ex. '3' ou '3,5'). None si absent ou invalide."""
+    valeur = os.environ.get(nom, "").strip().replace(",", ".")
+    try:
+        prix = float(valeur)
+    except ValueError:
+        return None
+    return prix if prix >= 0 else None
+
+
+class Consommation:
+    """Additionne les tokens de chaque appel à l'API pendant la séance."""
+
+    def __init__(self):
+        self.appels = 0
+        self.entree = 0
+        self.sortie = 0
+
+    def ajouter(self, usage):
+        self.appels += 1
+        if usage is not None:
+            self.entree += (getattr(usage, "input_tokens", 0) or 0)
+            # Les tokens lus ou écrits en cache comptent aussi comme tokens d'entrée
+            self.entree += (getattr(usage, "cache_read_input_tokens", 0) or 0)
+            self.entree += (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            self.sortie += (getattr(usage, "output_tokens", 0) or 0)
+
+    def cout(self, prix_entree, prix_sortie):
+        """Coût estimé en dollars, avec des prix en dollars par million de tokens."""
+        return (self.entree * prix_entree + self.sortie * prix_sortie) / 1_000_000
+
+    def resume(self, prix_entree=None, prix_sortie=None):
+        if not self.appels:
+            return "Aucun appel à l'API pour l'instant dans cette séance."
+        nombre = lambda n: f"{n:,}".replace(",", " ")
+        lignes = [
+            f"Consommation de la séance ({MODELE}) :",
+            f"- {self.appels} appel{'s' if self.appels > 1 else ''} à l'API",
+            f"- {nombre(self.entree)} tokens envoyés (notes, historique, questions)",
+            f"- {nombre(self.sortie)} tokens générés (réponses)",
+        ]
+        if prix_entree is not None and prix_sortie is not None:
+            lignes.append(f"- Coût estimé : {self.cout(prix_entree, prix_sortie):.4f} $".replace(".", ","))
+        else:
+            lignes.append("Pour voir un coût estimé, indique les prix de ton modèle (en $ par million de tokens) "
+                          "avec NOTEBOT_PRIX_ENTREE et NOTEBOT_PRIX_SORTIE.")
+        return "\n".join(lignes)
+
+
+CONSOMMATION = Consommation()
+
+
 def repondre(messages, client, max_tokens=MAX_TOKENS):
     outils_utilises = []
     for _ in range(MAX_TOURS):
@@ -249,6 +305,7 @@ def repondre(messages, client, max_tokens=MAX_TOKENS):
             tools=OUTILS,
             messages=messages,
         )
+        CONSOMMATION.ajouter(getattr(reponse, "usage", None))
         if reponse.stop_reason != "tool_use":
             # Réponse finale. Si elle a été coupée (max_tokens) pendant un appel d'outil, le
             # bloc tool_use n'a jamais de tool_result : le garder dans l'historique ferait
@@ -660,7 +717,7 @@ def main():
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
     print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'notes' pour lister tes notes, 'cherche <mot>' pour une recherche rapide, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
+          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'notes' pour lister tes notes, 'cherche <mot>' pour une recherche rapide, 'conso' pour les tokens utilisés, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
     a_revoir = sujets_a_revoir(charger_progres())
     if a_revoir:
         noms = ", ".join(sujet for sujet, _, _ in a_revoir)
@@ -687,6 +744,9 @@ def main():
                 print("\nImpossible d'enregistrer la conversation :", erreur)
                 continue
             print(f"\nConversation enregistrée : {chemin}" if chemin else "\nRien à exporter : pose d'abord une question.")
+            continue
+        if question.lower() == "conso":
+            print("\n" + CONSOMMATION.resume(prix_env("NOTEBOT_PRIX_ENTREE"), prix_env("NOTEBOT_PRIX_SORTIE")))
             continue
         if question.lower() == "notes":
             print("\n" + resume_notes())
@@ -744,6 +804,8 @@ def main():
             print(f"  [outil] {outil['nom']}({outil['arguments']})")
         print("\nNoteBot :", texte)
 
+    if CONSOMMATION.appels:
+        print("\n" + CONSOMMATION.resume(prix_env("NOTEBOT_PRIX_ENTREE"), prix_env("NOTEBOT_PRIX_SORTIE")))
     print("À plus !")
 
 
