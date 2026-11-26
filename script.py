@@ -718,7 +718,7 @@ def creer_fiche(sujet, client, afficher=print):
 COMMANDES = [
     ("Réviser", [
         ("<ta question>", "NoteBot répond à partir de tes notes", True),
-        ("quiz [sujet]", "5 questions sur tes notes, corrigées une par une ('stop' pour arrêter)", True),
+        ("quiz [sujet]", f"{QUIZ_QUESTIONS} questions sur tes notes, corrigées une par une ('stop' pour arrêter)", True),
         ("fiche <sujet>", "génère une fiche de révision dans fiches/", True),
         ("cherche <mot>", "trouve le texte exact dans tes notes", False),
         ("notes", "liste tes fichiers de notes", False),
