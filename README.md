@@ -135,6 +135,7 @@ python script.py
 | `progres` | Affiche tes résultats de quiz par sujet et ce qu'il faut réviser en priorité |
 | `notes` | Liste tes notes, sans appel à l'API |
 | `cherche <mot>` | Recherche rapide du texte exact dans tes notes, sans appel à l'API |
+| `aide` | Liste toutes les commandes, regroupées par usage, en indiquant celles qui utilisent l'API |
 | `revoir` | Liste les sujets à revoir aujourd'hui (révision espacée) |
 | `conso` | Affiche les appels et les tokens utilisés pendant la séance |
 | `export` | Enregistre la conversation dans `conversations/` |

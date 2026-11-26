@@ -710,14 +710,52 @@ def creer_fiche(sujet, client, afficher=print):
     return chemin
 
 
+# --------------------------------------------------------------------------
+# Aide : toutes les commandes, regroupées par usage
+# --------------------------------------------------------------------------
+
+# (groupe, [(commande, description, appelle l'API ?)])
+COMMANDES = [
+    ("Réviser", [
+        ("<ta question>", "NoteBot répond à partir de tes notes", True),
+        ("quiz [sujet]", "5 questions sur tes notes, corrigées une par une ('stop' pour arrêter)", True),
+        ("fiche <sujet>", "génère une fiche de révision dans fiches/", True),
+        ("cherche <mot>", "trouve le texte exact dans tes notes", False),
+        ("notes", "liste tes fichiers de notes", False),
+    ]),
+    ("Suivre tes progrès", [
+        ("progres", "tes scores de quiz par sujet, les plus faibles en premier", False),
+        ("revoir", "les sujets à réviser aujourd'hui (révision espacée)", False),
+    ]),
+    ("Gérer la séance", [
+        ("conso", "appels à l'API et tokens utilisés depuis le lancement", False),
+        ("export", "enregistre la conversation dans conversations/", False),
+        ("reset", "efface la conversation pour repartir de zéro", False),
+        ("aide", "affiche cette liste", False),
+        ("quitter", "ferme NoteBot (aussi 'q' ou 'exit')", False),
+    ]),
+]
+
+
+def texte_aide():
+    largeur = max(len(commande) for _, liste in COMMANDES for commande, _, _ in liste)
+    lignes = ["Commandes de NoteBot :"]
+    for groupe, liste in COMMANDES:
+        lignes += ["", groupe]
+        for commande, description, api in liste:
+            lignes.append(f"  {commande.ljust(largeur)}  {'*' if api else ' '} {description}")
+    lignes += ["", "* utilise l'API (voir 'conso'). Les autres commandes sont gratuites et instantanées."]
+    return "\n".join(lignes)
+
+
 def main():
     DOSSIER.mkdir(parents=True, exist_ok=True)
     if PdfReader is None and any(f.suffix.lower() == ".pdf" for f in fichiers_notes()):
         print("Attention : tu as des notes en PDF, mais le module pypdf n'est pas installé. "
               "Lance 'pip install pypdf' pour que NoteBot puisse les lire.")
     conversation = Conversation(anthropic.Anthropic())
-    print("NoteBot prêt ! Pose ta question ('quiz [sujet]' pour t'entraîner, 'fiche <sujet>' pour une fiche de révision, "
-          "'progres' pour voir tes résultats, 'revoir' pour les sujets à réviser aujourd'hui, 'notes' pour lister tes notes, 'cherche <mot>' pour une recherche rapide, 'conso' pour les tokens utilisés, 'export' pour enregistrer la conversation, 'reset' pour recommencer, 'quitter' pour sortir).")
+    print("NoteBot prêt ! Pose ta question sur tes notes, ou tape 'aide' pour voir toutes les commandes "
+          "(quiz, fiche, revoir...). 'quitter' pour sortir.")
     a_revoir = sujets_a_revoir(charger_progres())
     if a_revoir:
         noms = ", ".join(sujet for sujet, _, _ in a_revoir)
@@ -731,6 +769,9 @@ def main():
             break
         if question.lower() in ("quitter", "exit", "q"):
             break
+        if question.lower() in ("aide", "help", "?"):
+            print("\n" + texte_aide())
+            continue
         if question.lower() == "reset":
             conversation.reinitialiser()
             print("Conversation effacée.")
