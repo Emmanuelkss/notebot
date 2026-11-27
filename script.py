@@ -433,23 +433,52 @@ def exporter_conversation(conversation, dossier=None, date=None):
 # Mode quiz : NoteBot pose des questions tirées des notes et corrige
 # --------------------------------------------------------------------------
 
-def demande_question(numero, total, sujet):
+# Consignes ajoutées selon le niveau choisi : 'quiz facile <sujet>' ou 'quiz difficile <sujet>'
+NIVEAUX = {
+    "facile": {
+        "question": "Niveau facile : demande une définition ou un fait qui se trouve tel quel dans mes notes.",
+        "correction": "Sois indulgent : si l'idée principale est là, compte la réponse comme correcte.",
+    },
+    "normal": {"question": "", "correction": ""},
+    "difficile": {
+        "question": ("Niveau difficile : pose une question qui demande de comprendre ou d'appliquer "
+                     "(expliquer pourquoi, comparer deux notions, prévoir le résultat d'un exemple), "
+                     "pas seulement de réciter."),
+        "correction": "Sois exigeant : une réponse juste mais incomplète ou imprécise est « partiel ».",
+    },
+}
+NIVEAU_PAR_DEFAUT = "normal"
+
+
+def lire_commande_quiz(arguments):
+    """Sépare le niveau et le sujet : 'difficile les AVL' -> ('difficile', 'les AVL')."""
+    premier, _, reste = arguments.strip().partition(" ")
+    if premier.lower() in NIVEAUX:
+        return premier.lower(), reste.strip()
+    return NIVEAU_PAR_DEFAUT, arguments.strip()
+
+
+def demande_question(numero, total, sujet, niveau=NIVEAU_PAR_DEFAUT):
     portee = f"sur « {sujet} »" if sujet else "sur un sujet de mes notes de ton choix"
+    consigne = NIVEAUX[niveau]["question"]
     return (
         f"Mode quiz, question {numero} sur {total}, {portee}. "
         "Consulte mes notes avec les outils, puis pose-moi UNE seule question courte "
         "dont la réponse se trouve dans mes notes. Ne donne pas la réponse, "
         "et ne répète pas une question déjà posée dans ce quiz."
+        + (f" {consigne}" if consigne else "")
     )
 
 
-def demande_correction(reponse):
+def demande_correction(reponse, niveau=NIVEAU_PAR_DEFAUT):
+    consigne = NIVEAUX[niveau]["correction"]
     return (
         f"Ma réponse : {reponse}\n"
         "Corrige-la en t'appuyant sur mes notes. Commence ta réponse EXACTEMENT par "
         "une de ces lignes : « Verdict : correct », « Verdict : partiel » ou "
         "« Verdict : incorrect ». Ensuite, donne la bonne réponse en deux ou trois "
         "phrases et cite le fichier."
+        + (f" {consigne}" if consigne else "")
     )
 
 
@@ -480,16 +509,19 @@ def resume_score(verdicts):
     return f"Quiz terminé : {affichage} ({pourcentage} %). {bilan}"
 
 
-def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, afficher=print):
+def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, afficher=print,
+                niveau=NIVEAU_PAR_DEFAUT):
     """Pose `nombre` questions tirées des notes, corrige chaque réponse et affiche le score.
 
     `demander` et `afficher` remplacent input/print (utile pour les tests ou une interface).
     Tape 'stop' pendant le quiz pour l'arrêter. Retourne la liste des verdicts.
     """
     verdicts = []
-    afficher(f"\nQuiz de {nombre} questions{f' sur « {sujet} »' if sujet else ''}. Tape 'stop' pour arrêter.")
+    titre_niveau = "" if niveau == NIVEAU_PAR_DEFAUT else f" (niveau {niveau})"
+    afficher(f"\nQuiz de {nombre} questions{f' sur « {sujet} »' if sujet else ''}{titre_niveau}. "
+             "Tape 'stop' pour arrêter.")
     for numero in range(1, nombre + 1):
-        question, _ = conversation.envoyer(demande_question(numero, nombre, sujet))
+        question, _ = conversation.envoyer(demande_question(numero, nombre, sujet, niveau))
         afficher(f"\nQuestion {numero}/{nombre} : {question}")
         try:
             reponse = demander("Ta réponse : ").strip()
@@ -499,7 +531,7 @@ def lancer_quiz(conversation, sujet="", nombre=QUIZ_QUESTIONS, demander=input, a
             break
         if not reponse:
             reponse = "je ne sais pas"
-        correction, _ = conversation.envoyer(demande_correction(reponse))
+        correction, _ = conversation.envoyer(demande_correction(reponse, niveau))
         verdict = lire_verdict(correction)
         verdicts.append(verdict)
         afficher(f"\nNoteBot : {correction}")
@@ -528,7 +560,7 @@ def charger_progres(fichier=None):
             and isinstance(d["total"], int) and d["total"] > 0]
 
 
-def enregistrer_quiz(sujet, verdicts, fichier=None, date=None):
+def enregistrer_quiz(sujet, verdicts, fichier=None, date=None, niveau=NIVEAU_PAR_DEFAUT):
     """Ajoute le résultat d'un quiz à l'historique. Un quiz sans réponse notée n'est pas gardé.
     Retourne True si le résultat a été enregistré."""
     fichier = fichier or PROGRES
@@ -541,6 +573,7 @@ def enregistrer_quiz(sujet, verdicts, fichier=None, date=None):
         "sujet": sujet.strip() or SUJET_GENERAL,
         "points": points,
         "total": total,
+        "niveau": niveau,
     })
     fichier.parent.mkdir(parents=True, exist_ok=True)
     fichier.write_text(json.dumps(historique, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -719,6 +752,7 @@ COMMANDES = [
     ("Réviser", [
         ("<ta question>", "NoteBot répond à partir de tes notes", True),
         ("quiz [sujet]", f"{QUIZ_QUESTIONS} questions sur tes notes, corrigées une par une ('stop' pour arrêter)", True),
+        ("quiz difficile [sujet]", "questions plus exigeantes (ou 'quiz facile' pour plus simple)", True),
         ("fiche <sujet>", "génère une fiche de révision dans fiches/", True),
         ("cherche <mot>", "trouve le texte exact dans tes notes", False),
         ("notes", "liste tes fichiers de notes", False),
@@ -816,9 +850,9 @@ def main():
                 print("\nImpossible d'enregistrer la fiche :", erreur)
             continue
         if question.lower() == "quiz" or question.lower().startswith("quiz "):
-            sujet = question[4:].strip()
+            niveau, sujet = lire_commande_quiz(question[4:])
             try:
-                verdicts = lancer_quiz(conversation, sujet)
+                verdicts = lancer_quiz(conversation, sujet, niveau=niveau)
             except anthropic.APIError as erreur:
                 print("\nErreur de l'API :", erreur)
                 continue
@@ -826,7 +860,7 @@ def main():
                 print("\nErreur :", erreur)
                 continue
             try:
-                if enregistrer_quiz(sujet, verdicts):
+                if enregistrer_quiz(sujet, verdicts, niveau=niveau):
                     print("Résultat enregistré. Tape 'progres' pour voir ton évolution.")
             except OSError as erreur:
                 print("\nImpossible d'enregistrer le résultat du quiz :", erreur)
